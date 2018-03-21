@@ -1,0 +1,131 @@
+---
+title: "Analyses of Shrdlurn Data"
+author: "Jesse Mu"
+date: "3/20/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(cowplot)
+library(jsonlite)
+library(pbapply)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Process JSON files
+
+```{r}
+utts = do.call('rbind', lapply(list.files('data'), function(f) {
+  f = paste0('data/', f)
+  x = fromJSON(f)
+  commands_df = data.frame(x$history)
+  colnames(commands_df) = c('cStage', 'cLevelStep', 'cBits', 'cLevel', 'cUtterance')
+  commands_df = commands_df %>%
+    mutate(cStage = as.integer(as.character(cStage)),
+           cLevelStep = as.integer(as.character(cLevelStep)),
+           cBits = as.numeric(as.character(cBits)),
+           cLevel = as.integer(as.character(cLevel)),
+           cUtterance = as.character(cUtterance),
+           cCharLen = length(cUtterance),
+           cTokens = sapply(gregexpr("\\W+", cUtterance), length) + 1
+    ) %>%
+    filter(cUtterance != "") %>%
+    mutate(
+      id = x$id,
+      tlxMentalDemand = x$tlx_mental_demand,
+      tlxPerformance = x$tlx_performance,
+      tlxEffort = x$tlx_effort,
+      tlxFrustration = x$tlx_frustration,
+      mode = x$mode,
+      numQueries = x$numQueries,
+      totalChars = x$totalChars,
+      totalTokens = x$totalTokens,
+      numScrolls = x$numScrolls,
+      numStatus = x$numStatus,
+      cIndex = seq_along(cUtterance)
+    ) %>%
+    select(
+      id, mode, numQueries, totalChars, totalTokens, numScrolls, numStatus, tlxMentalDemand, tlxPerformance, tlxEffort, tlxFrustration,
+      cIndex, cUtterance, cStage, cLevelStep, cBits, cLevel, cCharLen, cTokens
+    )
+})) %>%
+  mutate(
+    mode = factor(ifelse(mode == 'restricted', 'Restricted', 'Unrestricted')),
+    id = factor(id)
+  )
+
+# Create summary by removing the utterance-specific info
+summ = utts %>%
+  select(-starts_with('c')) %>%
+  distinct %>%
+  mutate(
+    avgScrolls = numScrolls / numQueries
+  )
+
+max_penalty = utts %>%
+  group_by(id) %>%
+  summarise(max_penalty = max(cBits))
+
+summ = summ %>%
+  left_join(max_penalty, by = 'id')
+
+tlx = summ %>%
+  gather(tlxVariable, tlxValue, starts_with('tlx')) %>%
+  mutate(tlxVariable = factor(substring(tlxVariable, 4)))
+```
+
+# NASA TLX comparisons
+
+```{r}
+ggplot(tlx, aes(x = mode, y = tlxValue, fill = mode)) +
+  facet_wrap(~ tlxVariable) +
+  geom_boxplot() +
+  guides(fill = FALSE) +
+  xlab('') +
+  ylab('Score') +
+  scale_y_continuous(limits = c(0, 100), breaks = c(0, 20, 40, 60, 80, 100))
+```
+
+# Language comparisons
+
+```{r}
+ggplot(summ, aes(x = mode, y = avgScrolls, fill = mode)) +
+  guides(fill = FALSE) +
+  xlab('') +
+  ylab('Average number of scrolls') +
+  geom_boxplot()
+```
+
+```{r}
+ggplot(summ, aes(x = mode, y = max_penalty)) +
+  geom_boxplot()
+```
+
+```{r}
+ggplot(utts, aes(x = cIndex, y = cTokens, color = mode, group = id)) +
+  facet_wrap(~ mode) +
+  geom_line() +
+  xlab('Utterance') +
+  guides(color = FALSE) +
+  ylab('Utterance length')
+```
+
+# Wordclouds
+
+```{r}
+library(tm)
+rCorpus = SimpleCorpus(VectorSource(utts %>% filter(mode == 'Restricted') %>% .$cUtterance),
+                       control = list(language = 'en'))
+uCorpus = SimpleCorpus(VectorSource(utts %>% filter(mode == 'Unrestricted') %>% .$cUtterance),
+                       control = list(language = 'en'))
+```
+
+```{r}
+library(RColorBrewer)
+library(wordcloud)
+wordcloud::wordcloud(rCorpus, colors = brewer.pal(8, 'Dark2'), min.freq = 1)
+wordcloud::wordcloud(uCorpus, colors = brewer.pal(8, 'Dark2'), min.freq = 1)
+```
+
+
