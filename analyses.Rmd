@@ -16,6 +16,9 @@ knitr::opts_chunk$set(echo = TRUE)
 # Process JSON files
 
 ```{r}
+unrestricted = function(x) x %>% filter(mode == 'Unrestricted')
+restricted = function(x) x %>% filter(mode == 'Restricted')
+
 utts = do.call('rbind', lapply(list.files('data'), function(f) {
   f = paste0('data/', f)
   x = fromJSON(f)
@@ -34,7 +37,8 @@ utts = do.call('rbind', lapply(list.files('data'), function(f) {
     mutate(
       id = x$id,
       tlxMentalDemand = x$tlx_mental_demand,
-      tlxPerformance = x$tlx_performance,
+      # Reverse performance, so higher is better
+      tlxPerformance = 100 - x$tlx_performance,
       tlxEffort = x$tlx_effort,
       tlxFrustration = x$tlx_frustration,
       mode = x$mode,
@@ -75,27 +79,140 @@ tlx = summ %>%
   mutate(tlxVariable = factor(substring(tlxVariable, 4)))
 ```
 
+# Summary data
+
+```{r}
+summ %>%
+  group_by(mode) %>%
+  summarise(n = n())
+```
+
+
 # NASA TLX comparisons
 
 ```{r}
-ggplot(tlx, aes(x = mode, y = tlxValue, fill = mode)) +
+# T tests
+tts = sapply(unique(tlx$tlxVariable), function(var) {
+  tlx_ss = tlx %>% filter(tlxVariable == var)
+  tlx_ss_r = tlx_ss %>% filter(mode == 'Restricted') %>% .$tlxValue
+  tlx_ss_u = tlx_ss %>% filter(mode == 'Unrestricted') %>% .$tlxValu
+  diff = mean(tlx_ss_r) - mean(tlx_ss_u)
+  tt = t.test(tlx_ss_r, tlx_ss_u)
+  c(as.character(var), mean(tlx_ss_r), mean(tlx_ss_u), diff, tt$p.value, as.numeric(tt$parameter), tt$statistic)
+}) %>%
+  t %>%
+  as.data.frame %>%
+  mutate(
+    V2 = as.numeric(as.character(V2)),
+    V3 = as.numeric(as.character(V3)),
+    V4 = as.numeric(as.character(V4)),
+    V5 = as.numeric(as.character(V5)),
+    V6 = as.numeric(as.character(V6)),
+    t = as.numeric(as.character(t))
+  )
+colnames(tts) = c('tlxVariable', 'r', 'u', 'diff', 'p', 'df', 't')
+tts = tts %>%
+  mutate(signif = p < 0.05,
+         tlxVariable = as.character(tlxVariable)) %>%
+  tbl_df %>%
+  mutate(
+    label = ifelse(signif,
+                   paste0("italic(p)==", round(p, 3), "*\"*\""),
+                   paste0("italic(p)==", round(p, 3)))
+    # label = ifelse(signif,
+    #                paste0("italic(t(", round(df, 1), "))==", round(t, 2), "~~italic(p)==", round(p, 3), "*\"*\""),
+    #                paste0("italic(t(", round(df, 1), "))==", round(t, 2), "~~italic(p)==", round(p, 3)))
+  )
+```
+
+
+```{r}
+p = ggplot(tlx %>% mutate(tlxVariable = as.character(tlxVariable)), aes(x = mode, y = tlxValue, fill = mode)) +
+  geom_text(data = tts, mapping = aes(x = NULL, y = NULL, label = label, fill = NULL), x = 1.5, y = 10, parse = TRUE) +
   facet_wrap(~ tlxVariable) +
   geom_boxplot() +
   guides(fill = FALSE) +
   xlab('') +
   ylab('Score') +
   scale_y_continuous(limits = c(0, 100), breaks = c(0, 20, 40, 60, 80, 100))
+save_plot("~/Dropbox/Cambridge/R230/Report/tlx_results.pdf", p, base_height = 4.5)
+p
 ```
 
 # Language comparisons
 
 ```{r}
-ggplot(summ, aes(x = mode, y = avgScrolls, fill = mode)) +
+p = ggplot(summ, aes(x = mode, y = avgScrolls, fill = mode)) +
   guides(fill = FALSE) +
   xlab('') +
-  ylab('Average number of scrolls') +
-  geom_boxplot()
+  ylab('Mean scrolls/utterance') +
+  geom_boxplot() +
+  annotate('text', x = 1.5, y = 1, label = 'italic(p)==0.13', parse = TRUE) +
+  scale_y_continuous(limits = c(0, 30), breaks = c(0, 10, 20, 30))
+save_plot("~/Dropbox/Cambridge/R230/Report/avg_scrolls.pdf", p, base_aspect_ratio = 1.25, base_height = 3)
+p
 ```
+
+```{r}
+perf_corr = summ %>% left_join(distincts %>% select(id, n_distinct))%>%
+  # filter(mode == 'Unrestricted') %>%
+  # gather('Measure', 'Value', starts_with('tlx'), avgScrolls)
+  gather('Measure', 'Value', starts_with('tlx')) %>%
+  mutate(Measure = factor(substring(Measure, 4)))
+
+perf_corr_t = perf_corr %>%
+  group_by(mode, Measure) %>%
+  summarise(r = cor(avgScrolls, Value),
+         p = cor.test(avgScrolls, Value)$p.value) %>%
+  mutate(label = paste0("italic(r)==", round(r, 2), "~~italic(p)==", round(p, 2)))
+
+p = ggplot(perf_corr, aes(x = avgScrolls, y = Value, color = mode)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  guides(color = FALSE) +
+  facet_grid(mode ~ Measure) +
+  xlab('Mean Scrolls/Utterance') +
+  ylab('Score') +
+  scale_y_continuous(limits = c(0, 100), breaks = c(0, 25, 50, 75, 100)) +
+  geom_text(data = perf_corr_t, aes(x = NULL, y = NULL, color = NULL, label = label), x = 15, y = 10, parse = TRUE)
+save_plot("~/Dropbox/Cambridge/R230/Report/perf_corr.pdf", p, base_aspect_ratio = 1.9, base_height = 3.5)
+p
+```
+
+```{r}
+lang_corr = summ %>%
+  left_join(distincts %>% select(id, n_distinct)) %>%
+  left_join(utts %>% group_by(id, mode) %>% summarise(`Mean Utterance Length` = mean(cTokens))) %>%
+  filter(mode == 'Unrestricted') %>%
+  rename(`Distinct Tokens` = n_distinct) %>%
+  gather('LangProperty', 'Value', `Distinct Tokens`, `Mean Utterance Length`)
+  # gather('Measure', 'Value', starts_with('tlx'), avgScrolls)
+  # gather('Measure', 'Value', starts_with('tlx')) %>%
+  # mutate(Measure = factor(substring(Measure, 4)))
+
+lang_corr_t = lang_corr %>%
+  group_by(LangProperty) %>%
+  summarise(r = cor(avgScrolls, Value),
+         p = cor.test(avgScrolls, Value)$p.value) %>%
+  mutate(label = paste0("italic(r)==", round(r, 2), "~~italic(p)==", round(p, 2))) %>%
+  mutate(
+    x = ifelse(LangProperty == 'Distinct Tokens', 29, 5.1),
+    y = 0
+  )
+
+p = ggplot(lang_corr, aes(y = avgScrolls, x = Value)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  guides(color = FALSE) +
+  facet_wrap(~ LangProperty, scales = 'free_x') +
+  xlab('') +
+  ylab('Mean Scrolls/Utterance') +
+  geom_text(data = lang_corr_t, aes(x = x, y = y, color = NULL, label = label), parse = TRUE) +
+save_plot("~/Dropbox/Cambridge/R230/Report/lang_corr.pdf", p, base_aspect_ratio = 1.9, base_height = 3.5)
+p
+```
+
+
 
 ```{r}
 ggplot(summ, aes(x = mode, y = max_penalty)) +
@@ -124,8 +241,54 @@ uCorpus = SimpleCorpus(VectorSource(utts %>% filter(mode == 'Unrestricted') %>% 
 ```{r}
 library(RColorBrewer)
 library(wordcloud)
+pdf('~/Dropbox/Cambridge/R230/Report/wc_r.pdf')
 wordcloud::wordcloud(rCorpus, colors = brewer.pal(8, 'Dark2'), min.freq = 1)
+dev.off()
+pdf('~/Dropbox/Cambridge/R230/Report/wc_u.pdf')
 wordcloud::wordcloud(uCorpus, colors = brewer.pal(8, 'Dark2'), min.freq = 1)
+dev.off()
 ```
+
+```{r}
+r_tokens = utts %>% filter(mode == 'Restricted') %>% .$cTokens
+u_tokens = utts %>% filter(mode == 'Unrestricted') %>% .$cTokens
+t.test(r_tokens, u_tokens)
+```
+```{r}
+nutt = utts %>% group_by(id, mode) %>% summarise(n = n())
+r_nutt = nutt %>% filter(mode == 'Restricted') %>% .$cTokens
+u_nutt = nutt %>% filter(mode == 'Unrestricted') %>% .$cTokens
+t.test(r_nutt, u_nutt)
+```
+
+```{r}
+distincts = utts %>%
+  group_by(id, mode) %>%
+  summarise(all_utts = paste(cUtterance, sep = '', collapse = ' ')) %>%
+  mutate(n_distinct = sapply(strsplit(all_utts, " "), function(x) length(unique(x))) %>% unlist)
+r_distinct = distincts %>% filter(mode == 'Restricted') %>% .$n_distinct
+u_distinct = distincts %>% filter(mode == 'Unrestricted') %>% .$n_distinct
+t.test(r_distinct, u_distinct)
+```
+
+```{r}
+r_scrolls = summ %>% filter(mode == 'Restricted') %>% .$avgScrolls
+u_scrolls = summ %>% filter(mode == 'Unrestricted') %>% .$avgScrolls
+t.test(r_scrolls, u_scrolls)
+```
+
+# Examine example utterances of high/low-performing players
+
+```{r}
+summ %>%
+  unrestricted %>%
+  arrange(avgScrolls)
+```
+
+```{r}
+utts %>% filter(id == 'v7iva6hv') %>%
+  select(starts_with('c'))
+```
+
 
 
