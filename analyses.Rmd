@@ -9,7 +9,6 @@ output: html_document
 library(tidyverse)
 library(cowplot)
 library(jsonlite)
-library(pbapply)
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
@@ -95,10 +94,19 @@ summ %>%
 tts = sapply(unique(tlx$tlxVariable), function(var) {
   tlx_ss = tlx %>% filter(tlxVariable == var)
   tlx_ss_r = tlx_ss %>% filter(mode == 'Restricted') %>% .$tlxValue
-  tlx_ss_u = tlx_ss %>% filter(mode == 'Unrestricted') %>% .$tlxValu
+  tlx_ss_u = tlx_ss %>% filter(mode == 'Unrestricted') %>% .$tlxValue
+  print(length(tlx_ss_r))
+  print(length(tlx_ss_u))
   diff = mean(tlx_ss_r) - mean(tlx_ss_u)
-  tt = t.test(tlx_ss_r, tlx_ss_u)
-  c(as.character(var), mean(tlx_ss_r), mean(tlx_ss_u), diff, tt$p.value, as.numeric(tt$parameter), tt$statistic)
+  tt = coin::wilcox_test(y ~ x,
+                    data = data.frame(
+                      y = c(tlx_ss_r, tlx_ss_u),
+                      x = factor(rep(0:1, c(length(tlx_ss_r), length(tlx_ss_u))))),
+                    distribution = 'exact',
+                    ties.method = 'mid-ranks')
+  c(as.character(var), mean(tlx_ss_r), sd(tlx_ss_r), mean(tlx_ss_u), sd(tlx_ss_u), diff,
+    coin::pvalue(tt),
+    tt@statistic@linearstatistic - (8*(8+1)/2))
 }) %>%
   t %>%
   as.data.frame %>%
@@ -108,17 +116,21 @@ tts = sapply(unique(tlx$tlxVariable), function(var) {
     V4 = as.numeric(as.character(V4)),
     V5 = as.numeric(as.character(V5)),
     V6 = as.numeric(as.character(V6)),
-    t = as.numeric(as.character(t))
+    V7 = as.numeric(as.character(V7)),
+    V8 = as.numeric(as.character(V8))
   )
-colnames(tts) = c('tlxVariable', 'r', 'u', 'diff', 'p', 'df', 't')
+colnames(tts) = c('tlxVariable', 'r', 'r_sd', 'u', 'u_sd', 'diff', 'p', 'U')
 tts = tts %>%
   mutate(signif = p < 0.05,
          tlxVariable = as.character(tlxVariable)) %>%
   tbl_df %>%
   mutate(
     label = ifelse(signif,
-                   paste0("italic(p)==", round(p, 3), "*\"*\""),
-                   paste0("italic(p)==", round(p, 3)))
+                   paste0("italic(p)==", sprintf('%.3f', p), "*\"*\""),
+                   #ifelse(p < 0.10,
+                          #paste0("italic(p)==", round(p, 3), "^\"\u2020\""),
+                          paste0("italic(p)==", sprintf('%.3f', p)))
+
     # label = ifelse(signif,
     #                paste0("italic(t(", round(df, 1), "))==", round(t, 2), "~~italic(p)==", round(p, 3), "*\"*\""),
     #                paste0("italic(t(", round(df, 1), "))==", round(t, 2), "~~italic(p)==", round(p, 3)))
@@ -135,7 +147,7 @@ p = ggplot(tlx %>% mutate(tlxVariable = as.character(tlxVariable)), aes(x = mode
   xlab('') +
   ylab('Score') +
   scale_y_continuous(limits = c(0, 100), breaks = c(0, 20, 40, 60, 80, 100))
-save_plot("~/Dropbox/Cambridge/R230/Report/tlx_results.pdf", p, base_height = 4.5)
+save_plot("~/Desktop/tlx_results.pdf", p, base_height = 4.5)
 p
 ```
 
@@ -252,12 +264,14 @@ dev.off()
 ```{r}
 r_tokens = utts %>% filter(mode == 'Restricted') %>% .$cTokens
 u_tokens = utts %>% filter(mode == 'Unrestricted') %>% .$cTokens
-t.test(r_tokens, u_tokens)
+# t.test(r_tokens, u_tokens)
+wilcox.test(r_tokens, u_tokens)
 ```
+
 ```{r}
-nutt = utts %>% group_by(id, mode) %>% summarise(n = n())
-r_nutt = nutt %>% filter(mode == 'Restricted') %>% .$cTokens
-u_nutt = nutt %>% filter(mode == 'Unrestricted') %>% .$cTokens
+nutt = utts %>% group_by(id, mode) %>% summarise(n = n(), cTokens = mean(cTokens))
+r_nutt = utts %>% filter(mode == 'Restricted') %>% .$cTokens
+u_nutt = utts %>% filter(mode == 'Unrestricted') %>% .$cTokens
 t.test(r_nutt, u_nutt)
 ```
 
